@@ -140,54 +140,15 @@ static SEXP unserialize_from_pipe(int results[2]){
   return R_Unserialize(&stream);
 }
 
-SEXP R_eval_fork(SEXP call, SEXP env, SEXP subtmp, SEXP timeout, SEXP outfun, SEXP errfun){
-  int results[2];
-  int pipe_out[2];
-  int pipe_err[2];
-  bail_if(pipe(results), "create results pipe");
-  bail_if(pipe(pipe_out) || pipe(pipe_err), "create output pipes");
+int results[2];
+int pipe_out[2];
+int pipe_err[2];
+int fail = -1;
+SEXP Rcall;
 
-  //fork the main process
-  int fail = -1;
-  pid_t pid = fork();
-  bail_if(pid < 0, "fork()");
-
-  if(pid == 0){
-    //prevents signals from being propagated to fork
-    setpgid(0, 0);
-
-    //close read pipe
-    close(results[r]);
-
-    //This breaks parallel! See issue #11
-    safe_close(STDIN_FILENO);
-
-    //Linux only: try to kill proccess group when parent dies
-#ifdef PR_SET_PDEATHSIG
-    prctl(PR_SET_PDEATHSIG, SIGTERM);
-    signal(SIGTERM, kill_process_group);
-#endif
-
-    //this is the hacky stuff
-    prepare_fork(CHAR(STRING_ELT(subtmp, 0)), pipe_out[w], pipe_err[w]);
-
-    //execute
-    fail = 99; //not using this yet
-    SEXP object = R_tryEval(call, env, &fail);
-
-    //try to send the 'success byte' and then output
-    if(write(results[w], &fail, sizeof(fail)) > 0){
-      const char * errbuf = R_curErrorBuf();
-      serialize_to_pipe(fail || object == NULL ? mkString(errbuf ? errbuf : "unknown error in child") : object, results);
-    }
-
-    //suicide
-    close(results[w]);
-    close(pipe_out[w]);
-    close(pipe_err[w]);
-    raise(SIGKILL);
-  }
-
+SEXP R_fork_collect(SEXP p, SEXP timeout, SEXP outfun, SEXP errfun)
+{
+  pid_t pid = asInteger(p);
   //start timer
   struct timeval start, end;
   gettimeofday(&start, NULL);
@@ -242,15 +203,66 @@ SEXP R_eval_fork(SEXP call, SEXP env, SEXP subtmp, SEXP timeout, SEXP outfun, SE
   //actual R error
   if(status == 0 || fail){
     if(killcount && is_timeout){
-      Rf_errorcall(call, "timeout reached (%f sec)", totaltime);
+      Rf_errorcall(Rcall, "timeout reached (%f sec)", totaltime);
     } else if(killcount) {
-      Rf_errorcall(call, "process interrupted by parent");
+      Rf_errorcall(Rcall, "process interrupted by parent");
     } else if(isString(res) && Rf_length(res) && Rf_length(STRING_ELT(res, 0)) > 8){
       Rf_errorcall(R_NilValue, CHAR(STRING_ELT(res, 0)));
     }
-    Rf_errorcall(call, "child process has died");
+    Rf_errorcall(Rcall, "child process has died");
   }
 
   //add timeout attribute
   return res;
+}
+
+SEXP R_fork( SEXP call, SEXP env, SEXP subtmp ){
+  bail_if(pipe(results), "create results pipe");
+  bail_if(pipe(pipe_out) || pipe(pipe_err), "create output pipes");
+
+  //fork the main process
+  pid_t pid = fork();
+  bail_if(pid < 0, "fork()");
+
+  if(pid == 0){
+    //prevents signals from being propagated to fork
+    setpgid(0, 0);
+
+    //close read pipe
+    close(results[r]);
+
+    //This breaks parallel! See issue #11
+    safe_close(STDIN_FILENO);
+
+    //Linux only: try to kill proccess group when parent dies
+#ifdef PR_SET_PDEATHSIG
+    prctl(PR_SET_PDEATHSIG, SIGTERM);
+    signal(SIGTERM, kill_process_group);
+#endif
+
+    //this is the hacky stuff
+    prepare_fork(CHAR(STRING_ELT(subtmp, 0)), pipe_out[w], pipe_err[w]);
+
+    //execute
+    fail = 99; //not using this yet
+    SEXP object = R_tryEval(call, env, &fail);
+
+    //try to send the 'success byte' and then output
+    if(write(results[w], &fail, sizeof(fail)) > 0){
+      const char * errbuf = R_curErrorBuf();
+      serialize_to_pipe(fail || object == NULL ? mkString(errbuf ? errbuf : "unknown error in child") : object, results);
+    }
+
+    //suicide
+    close(results[w]);
+    close(pipe_out[w]);
+    close(pipe_err[w]);
+    raise(SIGKILL);
+  }
+  return ScalarInteger(pid);
+}
+
+SEXP R_eval_fork(SEXP call, SEXP env, SEXP subtmp, SEXP timeout, SEXP outfun, SEXP errfun){
+  SEXP pid = R_fork(call,env,subtmp);
+  return R_fork_collect(pid,timeout,outfun,errfun);
 }
