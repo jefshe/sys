@@ -140,6 +140,10 @@ static SEXP unserialize_from_pipe(int results[2]){
   return R_Unserialize(&stream);
 }
 
+
+//TODO: on subsequent forks these will flush the file descriptors, 
+//meaning the previous parent can't access its child's results
+//need to implement as queue
 int results[2];
 int pipe_out[2];
 int pipe_err[2];
