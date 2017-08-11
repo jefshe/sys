@@ -1,9 +1,9 @@
 #' @export
-eval_safe_nonblock <- function(expr, tmp = tempfile("fork"), std_out = stdout(), std_err = stderr(),
+eval_safe_background<- function(expr, tmp = tempfile("fork"), std_out = stdout(), std_err = stderr(),
                       timeout = 0, priority = NULL, uid = NULL, gid = NULL, rlimits = NULL,
                       profile = NULL, device = pdf){
   orig_expr <- substitute(expr)
-  out <- eval_fork_nonblock(expr = tryCatch({
+  out <- eval_fork_background(expr = tryCatch({
     if(length(priority))
       set_priority(priority)
     if(length(rlimits))
@@ -35,7 +35,7 @@ eval_safe_nonblock <- function(expr, tmp = tempfile("fork"), std_out = stdout(),
 
 #' @export
 #' @useDynLib sys R_fork
-eval_fork_nonblock <- function(expr, tmp = tempfile("fork")) {
+eval_fork_background<- function(expr, tmp = tempfile("fork")) {
   # Convert TRUE or filepath into connection objects
   clenv <- force(parent.frame())
   clexpr <- substitute(expr)
